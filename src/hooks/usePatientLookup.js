@@ -6,6 +6,8 @@ export const FIXED_COLUMNS_KEYS = [
   'id_fiche',
   'nom_prenom',
   'date_naissance',
+  'poids_naissance_g',
+  'taille_naissance_cm',
   'sexe',
   'type_fente',
   'lateralite',
@@ -36,7 +38,9 @@ export function usePatientLookup() {
         .from('visites')
         .select(FIXED_COLUMNS_KEYS.join(','))
         .eq('id_patient', idPatient.trim())
-        .order('created_at', { ascending: false })
+        .not('nom_prenom', 'is', null) // Ne prendre que les visites avec au moins nom_prenom rempli
+        .not('nom_prenom', 'eq', '') // Exclure aussi les chaînes vides
+        .order('date_consult', { ascending: false, nullsFirst: false }) // Trier par date de consultation réelle
         .limit(1)
         .maybeSingle();
 

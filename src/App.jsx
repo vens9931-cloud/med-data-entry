@@ -46,6 +46,8 @@ const FIXED_COLUMNS = [
   { key: 'id_fiche', label: 'ID Fiche', type: 'text' },
   { key: 'nom_prenom', label: 'Nom Prénom', type: 'text' },
   { key: 'date_naissance', label: 'Date Naiss.', type: 'date' },
+  { key: 'poids_naissance_g', label: 'Poids Naiss. (g)', type: 'number' },
+  { key: 'taille_naissance_cm', label: 'Taille Naiss. (cm)', type: 'number' },
   { key: 'sexe', label: 'Sexe', type: 'select', options: SELECT_OPTIONS.sexe },
   { key: 'type_fente', label: 'Type Fente', type: 'select', options: SELECT_OPTIONS.type_fente },
   { key: 'lateralite', label: 'Latéralité', type: 'select', options: SELECT_OPTIONS.lateralite },
@@ -53,7 +55,7 @@ const FIXED_COLUMNS = [
   { key: 'malform_assoc', label: 'Malf. Assoc.', type: 'select', options: SELECT_OPTIONS.malform_assoc },
   { key: 'prof_mere', label: 'Prof. Mère', type: 'text' },
   { key: 'prof_pere', label: 'Prof. Père', type: 'text' },
-  { key: 'milieu_residence', label: 'Milieu Rés.', type: 'select', options: SELECT_OPTIONS.milieu_residence },
+  { key: 'milieu_residence', label: 'Milieu Rés.', type: 'text' },
   { key: 'nb_enfants', label: 'Nb Enfants', type: 'text' }
 ];
 
@@ -71,7 +73,9 @@ const VARIABLE_COLUMNS = [
   { key: 'dispositif_spec', label: 'Disp. Spéc.', type: 'select', options: SELECT_OPTIONS.oui_non_np },
   { key: 'prescription', label: 'Prescription', type: 'select', options: SELECT_OPTIONS.oui_non_np },
   { key: 'ref_nutri', label: 'Réf. Nutri', type: 'select', options: SELECT_OPTIONS.oui_non_np },
-  { key: 'complication', label: 'Complication', type: 'select', options: SELECT_OPTIONS.oui_non_np }
+  { key: 'complication', label: 'Complication', type: 'select', options: SELECT_OPTIONS.oui_non_np },
+  { key: 'suivi_programme', label: 'Suivi Programm.', type: 'select', options: SELECT_OPTIONS.oui_non_np },
+  { key: 'perte_vue', label: 'Perte de Vue', type: 'select', options: SELECT_OPTIONS.oui_non_np }
 ];
 
 const CALCULATED_COLUMNS = [
@@ -314,6 +318,8 @@ function calculateDerivedData(row, allRows, rowIndex) {
 
 export default function NutritionalTrackingApp() {
   const [activeTab, setActiveTab] = useState('saisie');
+  // État local pour les valeurs en cours de saisie (pour mise à jour immédiate de l'UI)
+  const [localValues, setLocalValues] = useState({});
 
   // Hook Supabase pour les données
   const {
@@ -329,19 +335,28 @@ export default function NutritionalTrackingApp() {
     clearError
   } = useVisites();
 
+  // Fusionner les données avec les valeurs locales en cours de saisie
+  const dataWithLocalValues = useMemo(() => {
+    return data.map(row => {
+      const rowKey = row.id;
+      const localRow = localValues[rowKey] || {};
+      return { ...row, ...localRow };
+    });
+  }, [data, localValues]);
+
   // Calculer les données dérivées pour toutes les lignes
   const dataWithCalculations = useMemo(() => {
-    return data.map((row, index) => ({
+    return dataWithLocalValues.map((row, index) => ({
       ...row,
-      ...calculateDerivedData(row, data, index)
+      ...calculateDerivedData(row, dataWithLocalValues, index)
     }));
-  }, [data]);
+  }, [dataWithLocalValues]);
 
   // Statistiques
   const stats = useMemo(() => {
-    const uniquePatients = new Set(data.filter(r => r.id_patient).map(r => r.id_patient));
+    const uniquePatients = new Set(dataWithLocalValues.filter(r => r.id_patient).map(r => r.id_patient));
     const visitsWithGoodGain = dataWithCalculations.filter(r => r.gain_g_par_jour >= 20).length;
-    const visitsWithConseil = data.filter(r => r.conseil_nutri === 'Oui').length;
+    const visitsWithConseil = dataWithLocalValues.filter(r => r.conseil_nutri === 'Oui').length;
     const totalScorePec = dataWithCalculations.reduce((sum, r) => sum + (r.score_pec || 0), 0);
     const avgScorePec = data.length > 0 ? (totalScorePec / data.length).toFixed(1) : 0;
 
@@ -369,14 +384,14 @@ export default function NutritionalTrackingApp() {
     });
 
     return {
-      totalVisites: data.length,
+      totalVisites: dataWithLocalValues.length,
       totalPatients: uniquePatients.size,
       avgScorePec,
       visitsWithGoodGain,
       visitsWithConseil,
       patientDetails
     };
-  }, [data, dataWithCalculations]);
+  }, [dataWithLocalValues, dataWithCalculations]);
 
   // Ajouter une nouvelle ligne (via Supabase)
   const addRow = useCallback(async () => {
@@ -396,7 +411,38 @@ export default function NutritionalTrackingApp() {
     }
   }, [deleteRowFromDb]);
 
-  // Mettre à jour une cellule (via Supabase)
+  // Mettre à jour une cellule localement (pour mise à jour immédiate de l'UI)
+  const updateCellLocal = useCallback((id, key, value) => {
+    setLocalValues(prev => ({
+      ...prev,
+      [id]: {
+        ...prev[id],
+        [key]: value
+      }
+    }));
+  }, []);
+
+  // Sauvegarder une cellule dans Supabase (appelé au onBlur pour texte/number)
+  const saveCellToDb = useCallback(async (id, key, value) => {
+    try {
+      await updateCellInDb(id, key, value);
+      // Nettoyer la valeur locale après sauvegarde réussie
+      setLocalValues(prev => {
+        const newValues = { ...prev };
+        if (newValues[id]) {
+          delete newValues[id][key];
+          if (Object.keys(newValues[id]).length === 0) {
+            delete newValues[id];
+          }
+        }
+        return newValues;
+      });
+    } catch (err) {
+      console.error('Échec de la mise à jour:', err);
+    }
+  }, [updateCellInDb]);
+
+  // Mettre à jour une cellule (via Supabase) - pour selects et dates (sauvegarde immédiate)
   const updateCell = useCallback(async (id, key, value) => {
     try {
       await updateCellInDb(id, key, value);
@@ -489,7 +535,14 @@ export default function NutritionalTrackingApp() {
         <input
           type="number"
           value={value || ''}
-          onChange={(e) => updateCell(row.id, column.key, e.target.value ? Number(e.target.value) : '')}
+          onChange={(e) => {
+            const newValue = e.target.value ? Number(e.target.value) : '';
+            updateCellLocal(row.id, column.key, newValue);
+          }}
+          onBlur={(e) => {
+            const finalValue = e.target.value ? Number(e.target.value) : '';
+            saveCellToDb(row.id, column.key, finalValue);
+          }}
           className={`w-full px-1 py-1 text-xs border border-gray-300 rounded ${bgColor} focus:ring-1 focus:ring-blue-500`}
         />
       );
@@ -499,7 +552,12 @@ export default function NutritionalTrackingApp() {
       <input
         type="text"
         value={value || ''}
-        onChange={(e) => updateCell(row.id, column.key, e.target.value)}
+        onChange={(e) => {
+          updateCellLocal(row.id, column.key, e.target.value);
+        }}
+        onBlur={(e) => {
+          saveCellToDb(row.id, column.key, e.target.value);
+        }}
         className={`w-full px-1 py-1 text-xs border border-gray-300 rounded ${bgColor} focus:ring-1 focus:ring-blue-500`}
       />
     );
@@ -725,13 +783,15 @@ export default function NutritionalTrackingApp() {
           <li><strong>id_fiche</strong> : Numéro de dossier médical (ex: 2023/006926)</li>
           <li><strong>nom_prenom</strong> : Nom complet du patient</li>
           <li><strong>date_naissance</strong> : Date de naissance</li>
+          <li><strong>poids_naissance_g</strong> : Poids à la naissance en grammes</li>
+          <li><strong>taille_naissance_cm</strong> : Taille à la naissance en centimètres</li>
           <li><strong>sexe</strong> : M (Masculin) ou F (Féminin)</li>
           <li><strong>type_fente</strong> : Labiale, Palatine, ou Labiopalatine</li>
           <li><strong>lateralite</strong> : Gauche, Droite, Bilatérale, ou NA</li>
           <li><strong>severite</strong> : Complète, Incomplète, ou NP (Non Précisé)</li>
           <li><strong>malform_assoc</strong> : Malformations associées (Oui/Non/NP)</li>
           <li><strong>prof_mere / prof_pere</strong> : Profession des parents</li>
-          <li><strong>milieu_residence</strong> : Urbain, Périurbain, ou Rural</li>
+          <li><strong>milieu_residence</strong> : Milieu de résidence (texte libre)</li>
           <li><strong>nb_enfants</strong> : Nombre d'enfants dans la fratrie</li>
         </ul>
       </div>
@@ -755,6 +815,8 @@ export default function NutritionalTrackingApp() {
           <li><strong>prescription</strong> : Prescription médicale</li>
           <li><strong>ref_nutri</strong> : Référence vers nutritionniste</li>
           <li><strong>complication</strong> : Présence de complications</li>
+          <li><strong>suivi_programme</strong> : Visite programmée (Oui) ou consultation spontanée (Non)</li>
+          <li><strong>perte_vue</strong> : Patient perdu de vue (Oui) ou suivi actif (Non)</li>
         </ul>
       </div>
 

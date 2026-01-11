@@ -56,6 +56,8 @@ export function useVisites() {
         id_fiche: patientData.id_fiche || null,
         nom_prenom: patientData.nom_prenom || null,
         date_naissance: patientData.date_naissance || null,
+        poids_naissance_g: patientData.poids_naissance_g || null,
+        taille_naissance_cm: patientData.taille_naissance_cm || null,
         sexe: patientData.sexe || null,
         type_fente: patientData.type_fente || null,
         lateralite: patientData.lateralite || null,
@@ -79,7 +81,9 @@ export function useVisites() {
         dispositif_spec: null,
         prescription: null,
         ref_nutri: null,
-        complication: null
+        complication: null,
+        suivi_programme: null,
+        perte_vue: null
       };
 
       const { data: insertedRow, error: insertError } = await supabase
