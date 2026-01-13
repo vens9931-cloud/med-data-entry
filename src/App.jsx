@@ -23,6 +23,7 @@ import {
 import { useVisites } from './hooks/useVisites';
 import { PatientIdInput } from './components/PatientIdInput';
 import { StatusIndicator, ErrorMessage, TableSkeleton } from './components/StatusIndicator';
+import { ImageImport } from './components/ImageImport';
 
 // =============================================================================
 // TYPES ET CONSTANTES
@@ -460,6 +461,28 @@ export default function NutritionalTrackingApp() {
     }
   }, [updateMultipleCells]);
 
+  // Importer des visites depuis une image (OCR + Gemini)
+  const handleImageImport = useCallback(async (visites) => {
+    try {
+      // Créer chaque visite en séquence
+      for (const visite of visites) {
+        const newRow = await addRowToDb({});
+        if (newRow && newRow.id) {
+          // Mettre à jour avec les données extraites
+          await updateMultipleCells(newRow.id, visite);
+        }
+      }
+    } catch (err) {
+      console.error('Échec de l\'import depuis image:', err);
+      throw err;
+    }
+  }, [addRowToDb, updateMultipleCells]);
+
+  // Obtenir la liste des IDs patients existants (pour générer les nouveaux IDs)
+  const existingPatientIds = useMemo(() => {
+    return [...new Set(data.filter(r => r.id_patient).map(r => r.id_patient))];
+  }, [data]);
+
   // Export CSV
   const exportCSV = useCallback(() => {
     const headers = [
@@ -621,6 +644,10 @@ export default function NutritionalTrackingApp() {
             <Plus size={18} />
             Nouvelle visite
           </button>
+          <ImageImport
+            onImportComplete={handleImageImport}
+            existingPatientIds={existingPatientIds}
+          />
           <button
             onClick={exportCSV}
             disabled={loading}
