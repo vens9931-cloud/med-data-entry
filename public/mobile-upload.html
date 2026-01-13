@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Upload Photo - Fiches Médicales</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      padding: 20px;
+    }
+
+    .container {
+      max-width: 400px;
+      margin: 0 auto;
+    }
+
+    .card {
+      background: white;
+      border-radius: 20px;
+      padding: 30px 20px;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+    }
+
+    h1 {
+      color: #333;
+      font-size: 1.5rem;
+      text-align: center;
+      margin-bottom: 10px;
+    }
+
+    .subtitle {
+      color: #666;
+      text-align: center;
+      font-size: 0.9rem;
+      margin-bottom: 30px;
+    }
+
+    .session-id {
+      background: #f0f0f0;
+      padding: 8px 12px;
+      border-radius: 8px;
+      font-family: monospace;
+      font-size: 0.75rem;
+      text-align: center;
+      margin-bottom: 20px;
+      word-break: break-all;
+    }
+
+    .upload-area {
+      display: flex;
+      flex-direction: column;
+      gap: 15px;
+    }
+
+    .upload-btn {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 30px;
+      border: 3px dashed #764ba2;
+      border-radius: 15px;
+      background: #f8f4ff;
+      cursor: pointer;
+      transition: all 0.3s;
+    }
+
+    .upload-btn:active {
+      transform: scale(0.98);
+      background: #efe8ff;
+    }
+
+    .upload-btn svg {
+      width: 50px;
+      height: 50px;
+      color: #764ba2;
+      margin-bottom: 10px;
+    }
+
+    .upload-btn span {
+      color: #764ba2;
+      font-weight: 600;
+      font-size: 1.1rem;
+    }
+
+    .upload-btn small {
+      color: #999;
+      font-size: 0.8rem;
+      margin-top: 5px;
+    }
+
+    input[type="file"] {
+      display: none;
+    }
+
+    .preview-section {
+      margin-top: 20px;
+    }
+
+    .preview-title {
+      font-size: 0.9rem;
+      color: #666;
+      margin-bottom: 10px;
+    }
+
+    .preview-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+    }
+
+    .preview-item {
+      position: relative;
+      aspect-ratio: 1;
+      border-radius: 10px;
+      overflow: hidden;
+      background: #f0f0f0;
+    }
+
+    .preview-item img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .preview-item .status {
+      position: absolute;
+      bottom: 5px;
+      right: 5px;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .preview-item .status.uploading {
+      background: #ffc107;
+    }
+
+    .preview-item .status.done {
+      background: #4caf50;
+    }
+
+    .preview-item .status.error {
+      background: #f44336;
+    }
+
+    .preview-item .status svg {
+      width: 14px;
+      height: 14px;
+      color: white;
+    }
+
+    .message {
+      padding: 15px;
+      border-radius: 10px;
+      text-align: center;
+      margin-top: 20px;
+    }
+
+    .message.success {
+      background: #e8f5e9;
+      color: #2e7d32;
+    }
+
+    .message.error {
+      background: #ffebee;
+      color: #c62828;
+    }
+
+    .message.info {
+      background: #e3f2fd;
+      color: #1565c0;
+    }
+
+    .spinner {
+      width: 20px;
+      height: 20px;
+      border: 2px solid transparent;
+      border-top-color: white;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .footer {
+      text-align: center;
+      color: rgba(255,255,255,0.7);
+      font-size: 0.8rem;
+      margin-top: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <h1>📷 Upload de Fiche</h1>
+      <p class="subtitle">Prenez une photo ou sélectionnez une image</p>
+
+      <div class="session-id" id="sessionDisplay">Session: ...</div>
+
+      <div class="upload-area">
+        <!-- Bouton Caméra -->
+        <label class="upload-btn" id="cameraBtn">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/>
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"/>
+          </svg>
+          <span>Prendre une photo</span>
+          <small>Ouvre la caméra</small>
+          <input type="file" accept="image/*" capture="environment" id="cameraInput">
+        </label>
+
+        <!-- Bouton Galerie -->
+        <label class="upload-btn" style="border-color: #3b82f6; background: #eff6ff;">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="#3b82f6">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+          </svg>
+          <span style="color: #3b82f6;">Galerie</span>
+          <small>Choisir une image</small>
+          <input type="file" accept="image/*" multiple id="galleryInput">
+        </label>
+      </div>
+
+      <!-- Preview des images -->
+      <div class="preview-section" id="previewSection" style="display: none;">
+        <p class="preview-title">Images envoyées:</p>
+        <div class="preview-grid" id="previewGrid"></div>
+      </div>
+
+      <!-- Messages -->
+      <div id="messageArea"></div>
+    </div>
+
+    <p class="footer">Les photos seront disponibles sur votre PC</p>
+  </div>
+
+  <script type="module">
+    import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+
+    // Configuration Supabase (même que l'app principale)
+    const SUPABASE_URL = 'https://edusnsaophiphrichjlq.supabase.co';
+    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVkdXNuc2FvcGhpcGhyaWNoamxxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgwOTA1NDQsImV4cCI6MjA4MzY2NjU0NH0.B_tHuYiTA9y2XhoDIlNyDMPrBB4qscD6euTQpdw_JPE';
+    const BUCKET_NAME = 'fiches-temp';
+
+    const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+    // Récupérer l'ID de session depuis l'URL
+    const urlParams = new URLSearchParams(window.location.search);
+    const sessionId = urlParams.get('session');
+
+    // Afficher la session
+    const sessionDisplay = document.getElementById('sessionDisplay');
+    if (sessionId) {
+      sessionDisplay.textContent = `Session: ${sessionId.slice(0, 20)}...`;
+    } else {
+      sessionDisplay.textContent = 'Erreur: Pas de session';
+      sessionDisplay.style.background = '#ffebee';
+      sessionDisplay.style.color = '#c62828';
+    }
+
+    // Éléments DOM
+    const cameraInput = document.getElementById('cameraInput');
+    const galleryInput = document.getElementById('galleryInput');
+    const previewSection = document.getElementById('previewSection');
+    const previewGrid = document.getElementById('previewGrid');
+    const messageArea = document.getElementById('messageArea');
+
+    let uploadedCount = 0;
+
+    // Fonction pour afficher un message
+    function showMessage(text, type = 'info') {
+      messageArea.innerHTML = `<div class="message ${type}">${text}</div>`;
+    }
+
+    // Fonction pour uploader une image
+    async function uploadImage(file) {
+      const previewId = `preview-${Date.now()}`;
+
+      // Créer la preview
+      previewSection.style.display = 'block';
+      const previewItem = document.createElement('div');
+      previewItem.className = 'preview-item';
+      previewItem.id = previewId;
+
+      const img = document.createElement('img');
+      img.src = URL.createObjectURL(file);
+      previewItem.appendChild(img);
+
+      const status = document.createElement('div');
+      status.className = 'status uploading';
+      status.innerHTML = '<div class="spinner"></div>';
+      previewItem.appendChild(status);
+
+      previewGrid.appendChild(previewItem);
+
+      try {
+        const fileName = `${sessionId}/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
+
+        const { data, error } = await supabase.storage
+          .from(BUCKET_NAME)
+          .upload(fileName, file, {
+            cacheControl: '3600',
+            upsert: false
+          });
+
+        if (error) throw error;
+
+        // Succès
+        status.className = 'status done';
+        status.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/></svg>';
+
+        uploadedCount++;
+        showMessage(`✅ ${uploadedCount} image(s) envoyée(s) au PC`, 'success');
+
+      } catch (err) {
+        console.error('Erreur upload:', err);
+        status.className = 'status error';
+        status.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M6 18L18 6M6 6l12 12"/></svg>';
+        showMessage(`❌ Erreur: ${err.message}`, 'error');
+      }
+    }
+
+    // Gérer la sélection de fichiers
+    async function handleFiles(files) {
+      if (!sessionId) {
+        showMessage('❌ Session invalide. Scannez à nouveau le QR code.', 'error');
+        return;
+      }
+
+      for (const file of files) {
+        if (file.type.startsWith('image/')) {
+          await uploadImage(file);
+        }
+      }
+    }
+
+    // Event listeners
+    cameraInput.addEventListener('change', (e) => handleFiles(e.target.files));
+    galleryInput.addEventListener('change', (e) => handleFiles(e.target.files));
+
+    // Message initial
+    if (sessionId) {
+      showMessage('📱 Prenez une photo ou sélectionnez une image', 'info');
+    }
+  </script>
+</body>
+</html>

@@ -1,17 +1,18 @@
-import React, { useState, useRef, useCallback } from 'react';
-import { Camera, Upload, X, Loader2, AlertCircle, CheckCircle, Eye, Edit3, Plus, Trash2, Image } from 'lucide-react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
+import { Camera, Upload, X, Loader2, AlertCircle, CheckCircle, Eye, Edit3, Plus, Trash2, Image, Smartphone, Monitor } from 'lucide-react';
+import { QRCodeSVG } from 'qrcode.react';
 import { extractMedicalData, generatePatientId } from '../lib/gemini';
+import { generateSessionId, getMobileUploadUrl, listSessionImages, downloadImageAsFile, clearSession, subscribeToSession } from '../lib/imageSync';
 
 // Clé API depuis les variables d'environnement
 const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
 
 /**
- * Composant pour importer des fiches médicales via photo ou caméra
- * Utilise Gemini Vision pour extraire les données
- * Permet l'édition avant création
+ * Composant pour importer des fiches médicales via photo, caméra ou téléphone
  */
 export function ImageImport({ onImportComplete, existingPatientIds = [] }) {
   const [isOpen, setIsOpen] = useState(false);
+  const [mode, setMode] = useState(null); // 'local' ou 'phone'
   const [images, setImages] = useState([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState(null);
@@ -20,6 +21,64 @@ export function ImageImport({ onImportComplete, existingPatientIds = [] }) {
   const [editableVisites, setEditableVisites] = useState([]);
   const fileInputRef = useRef(null);
   const cameraInputRef = useRef(null);
+
+  // État pour le mode téléphone
+  const [sessionId, setSessionId] = useState(null);
+  const [mobileUrl, setMobileUrl] = useState('');
+  const [receivedImages, setReceivedImages] = useState([]);
+  const unsubscribeRef = useRef(null);
+
+  // Démarrer une session mobile
+  const startMobileSession = useCallback(() => {
+    const newSessionId = generateSessionId();
+    setSessionId(newSessionId);
+    setMobileUrl(getMobileUploadUrl(newSessionId));
+    setReceivedImages([]);
+    setMode('phone');
+
+    // Écouter les nouvelles images
+    unsubscribeRef.current = subscribeToSession(newSessionId, async (path) => {
+      try {
+        const file = await downloadImageAsFile(path);
+        setReceivedImages(prev => [...prev, file]);
+      } catch (err) {
+        console.error('Erreur réception image:', err);
+      }
+    });
+  }, []);
+
+  // Arrêter la session mobile
+  const stopMobileSession = useCallback(async () => {
+    if (unsubscribeRef.current) {
+      unsubscribeRef.current();
+      unsubscribeRef.current = null;
+    }
+    if (sessionId) {
+      try {
+        await clearSession(sessionId);
+      } catch (err) {
+        console.error('Erreur nettoyage session:', err);
+      }
+    }
+    setSessionId(null);
+    setMobileUrl('');
+  }, [sessionId]);
+
+  // Utiliser les images reçues du téléphone
+  const useReceivedImages = useCallback(() => {
+    setImages(receivedImages);
+    stopMobileSession();
+    setMode('local');
+  }, [receivedImages, stopMobileSession]);
+
+  // Cleanup à la fermeture
+  useEffect(() => {
+    return () => {
+      if (unsubscribeRef.current) {
+        unsubscribeRef.current();
+      }
+    };
+  }, []);
 
   // Ouvrir le sélecteur de fichiers
   const handleSelectFiles = useCallback(() => {
@@ -31,7 +90,7 @@ export function ImageImport({ onImportComplete, existingPatientIds = [] }) {
     cameraInputRef.current?.click();
   }, []);
 
-  // Gérer la sélection de fichiers ou capture caméra
+  // Gérer la sélection de fichiers
   const handleFileChange = useCallback((e) => {
     const files = Array.from(e.target.files || []);
     const imageFiles = files.filter(f => f.type.startsWith('image/'));
@@ -39,9 +98,6 @@ export function ImageImport({ onImportComplete, existingPatientIds = [] }) {
     if (imageFiles.length > 0) {
       setImages(prev => [...prev, ...imageFiles]);
       setError(null);
-      setExtractedData(null);
-      setEditablePatient(null);
-      setEditableVisites([]);
     }
     e.target.value = '';
   }, []);
@@ -54,7 +110,7 @@ export function ImageImport({ onImportComplete, existingPatientIds = [] }) {
   // Lancer l'extraction
   const handleExtract = useCallback(async () => {
     if (!GEMINI_API_KEY) {
-      setError('Clé API Gemini non configurée. Ajoutez VITE_GEMINI_API_KEY dans le fichier .env');
+      setError('Clé API Gemini non configurée. Ajoutez VITE_GEMINI_API_KEY dans .env');
       return;
     }
 
@@ -70,7 +126,6 @@ export function ImageImport({ onImportComplete, existingPatientIds = [] }) {
       const data = await extractMedicalData(images, GEMINI_API_KEY);
       setExtractedData(data);
 
-      // Préparer les données éditables
       const patientId = data.patient?.nom_prenom
         ? generatePatientId(data.patient.nom_prenom, existingPatientIds)
         : '';
@@ -142,7 +197,6 @@ export function ImageImport({ onImportComplete, existingPatientIds = [] }) {
     setIsProcessing(true);
 
     try {
-      // Préparer les visites avec données patient
       let visites = editableVisites.map(v => ({
         ...editablePatient,
         date_consult: v.date_consult,
@@ -151,7 +205,6 @@ export function ImageImport({ onImportComplete, existingPatientIds = [] }) {
         pb_mm: v.pb_mm
       }));
 
-      // Si pas de visites, créer une ligne avec juste les données patient
       if (visites.length === 0) {
         visites = [{
           ...editablePatient,
@@ -164,13 +217,8 @@ export function ImageImport({ onImportComplete, existingPatientIds = [] }) {
 
       await onImportComplete(visites);
 
-      // Reset
-      setIsOpen(false);
-      setImages([]);
-      setExtractedData(null);
-      setEditablePatient(null);
-      setEditableVisites([]);
-      setError(null);
+      // Reset complet
+      handleClose();
 
     } catch (err) {
       setError(err.message);
@@ -179,14 +227,27 @@ export function ImageImport({ onImportComplete, existingPatientIds = [] }) {
     }
   }, [editablePatient, editableVisites, onImportComplete]);
 
-  // Fermer
+  // Fermer et reset
   const handleClose = useCallback(() => {
+    stopMobileSession();
     setIsOpen(false);
+    setMode(null);
     setImages([]);
     setExtractedData(null);
     setEditablePatient(null);
     setEditableVisites([]);
     setError(null);
+    setReceivedImages([]);
+  }, [stopMobileSession]);
+
+  // Recommencer
+  const handleRestart = useCallback(() => {
+    setExtractedData(null);
+    setEditablePatient(null);
+    setEditableVisites([]);
+    setImages([]);
+    setMode(null);
+    setReceivedImages([]);
   }, []);
 
   // Bouton d'ouverture
@@ -212,112 +273,154 @@ export function ImageImport({ onImportComplete, existingPatientIds = [] }) {
             <Camera size={24} />
             Importer depuis photo
           </h2>
-          <button
-            onClick={handleClose}
-            className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg"
-          >
+          <button onClick={handleClose} className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg">
             <X size={20} />
           </button>
         </div>
 
         {/* Corps */}
         <div className="flex-1 overflow-y-auto p-4">
-          {/* Zone upload (si pas encore de données extraites) */}
-          {!editablePatient && (
+
+          {/* Choix du mode */}
+          {!mode && !editablePatient && (
+            <div className="grid grid-cols-2 gap-4">
+              {/* Mode PC */}
+              <button
+                onClick={() => setMode('local')}
+                className="flex flex-col items-center justify-center gap-4 p-8 border-2 border-dashed border-blue-300 rounded-xl hover:border-blue-500 hover:bg-blue-50 transition-colors"
+              >
+                <Monitor size={56} className="text-blue-500" />
+                <span className="text-blue-700 font-semibold text-lg">Sur ce PC</span>
+                <span className="text-sm text-blue-400 text-center">Prendre une photo ou choisir un fichier</span>
+              </button>
+
+              {/* Mode Téléphone */}
+              <button
+                onClick={startMobileSession}
+                className="flex flex-col items-center justify-center gap-4 p-8 border-2 border-dashed border-purple-300 rounded-xl hover:border-purple-500 hover:bg-purple-50 transition-colors"
+              >
+                <Smartphone size={56} className="text-purple-500" />
+                <span className="text-purple-700 font-semibold text-lg">Depuis téléphone</span>
+                <span className="text-sm text-purple-400 text-center">Scanner le QR code avec votre téléphone</span>
+              </button>
+            </div>
+          )}
+
+          {/* Mode Téléphone - QR Code */}
+          {mode === 'phone' && !editablePatient && (
+            <div className="flex flex-col items-center">
+              <h3 className="text-lg font-semibold text-gray-700 mb-4">Scannez ce QR code avec votre téléphone</h3>
+
+              <div className="p-4 bg-white border-4 border-purple-200 rounded-2xl shadow-lg">
+                <QRCodeSVG value={mobileUrl} size={200} />
+              </div>
+
+              <p className="mt-4 text-sm text-gray-500 text-center max-w-md">
+                Ouvrez l'appareil photo de votre téléphone et pointez vers le QR code.
+                Vous pourrez prendre des photos qui apparaîtront ici.
+              </p>
+
+              {/* Images reçues */}
+              {receivedImages.length > 0 && (
+                <div className="mt-6 w-full">
+                  <h4 className="text-sm font-medium text-green-700 mb-2 flex items-center gap-2">
+                    <CheckCircle size={16} />
+                    {receivedImages.length} image(s) reçue(s)
+                  </h4>
+                  <div className="grid grid-cols-4 gap-2">
+                    {receivedImages.map((file, index) => (
+                      <div key={index} className="aspect-square rounded-lg overflow-hidden border-2 border-green-300">
+                        <img
+                          src={URL.createObjectURL(file)}
+                          alt={`Reçue ${index + 1}`}
+                          className="w-full h-full object-cover"
+                        />
+                      </div>
+                    ))}
+                  </div>
+
+                  <button
+                    onClick={useReceivedImages}
+                    className="mt-4 w-full flex items-center justify-center gap-2 px-4 py-3 text-white bg-green-600 rounded-lg hover:bg-green-700"
+                  >
+                    <CheckCircle size={20} />
+                    Utiliser ces images
+                  </button>
+                </div>
+              )}
+
+              <button
+                onClick={() => { stopMobileSession(); setMode(null); }}
+                className="mt-4 text-sm text-gray-500 hover:text-gray-700"
+              >
+                ← Retour
+              </button>
+            </div>
+          )}
+
+          {/* Mode Local - Upload */}
+          {mode === 'local' && !editablePatient && (
             <>
-              {/* Boutons Caméra et Fichiers */}
               <div className="grid grid-cols-2 gap-4 mb-4">
-                {/* Bouton Caméra */}
                 <button
                   onClick={handleOpenCamera}
                   className="flex flex-col items-center justify-center gap-3 p-6 border-2 border-dashed border-purple-300 rounded-xl hover:border-purple-500 hover:bg-purple-50 transition-colors"
                 >
                   <Camera size={48} className="text-purple-500" />
                   <span className="text-purple-700 font-medium">Prendre une photo</span>
-                  <span className="text-xs text-purple-400">Utiliser la caméra</span>
                 </button>
 
-                {/* Bouton Fichiers */}
                 <button
                   onClick={handleSelectFiles}
                   className="flex flex-col items-center justify-center gap-3 p-6 border-2 border-dashed border-blue-300 rounded-xl hover:border-blue-500 hover:bg-blue-50 transition-colors"
                 >
                   <Image size={48} className="text-blue-500" />
                   <span className="text-blue-700 font-medium">Choisir une image</span>
-                  <span className="text-xs text-blue-400">Depuis la galerie</span>
                 </button>
               </div>
 
-              {/* Inputs cachés */}
-              <input
-                ref={cameraInputRef}
-                type="file"
-                accept="image/*"
-                capture="environment"
-                onChange={handleFileChange}
-                className="hidden"
-              />
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                multiple
-                onChange={handleFileChange}
-                className="hidden"
-              />
+              <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" onChange={handleFileChange} className="hidden" />
+              <input ref={fileInputRef} type="file" accept="image/*" multiple onChange={handleFileChange} className="hidden" />
 
-              {/* Preview images */}
               {images.length > 0 && (
                 <div className="mt-4">
                   <h3 className="text-sm font-medium text-gray-700 mb-2">Images ({images.length})</h3>
                   <div className="grid grid-cols-4 gap-2">
                     {images.map((file, index) => (
-                      <div key={index} className="relative group">
-                        <img
-                          src={URL.createObjectURL(file)}
-                          alt={`Image ${index + 1}`}
-                          className="w-full h-20 object-cover rounded-lg border"
-                        />
+                      <div key={index} className="relative group aspect-square">
+                        <img src={URL.createObjectURL(file)} alt={`Image ${index + 1}`} className="w-full h-full object-cover rounded-lg border" />
                         <button
-                          onClick={(e) => { e.stopPropagation(); removeImage(index); }}
+                          onClick={() => removeImage(index)}
                           className="absolute top-1 right-1 p-1 bg-red-500 text-white rounded-full opacity-0 group-hover:opacity-100"
                         >
                           <X size={12} />
                         </button>
                       </div>
                     ))}
-                    {/* Bouton ajouter plus */}
-                    <button
-                      onClick={handleOpenCamera}
-                      className="w-full h-20 flex items-center justify-center border-2 border-dashed border-gray-300 rounded-lg hover:border-purple-400 hover:bg-purple-50"
-                    >
+                    <button onClick={handleOpenCamera} className="aspect-square flex items-center justify-center border-2 border-dashed border-gray-300 rounded-lg hover:border-purple-400">
                       <Plus size={24} className="text-gray-400" />
                     </button>
                   </div>
                 </div>
               )}
 
-              {/* Bouton extraction */}
               {images.length > 0 && (
                 <button
                   onClick={handleExtract}
                   disabled={isProcessing}
                   className="mt-4 w-full flex items-center justify-center gap-2 px-4 py-3 text-white bg-purple-600 rounded-lg hover:bg-purple-700 disabled:opacity-50"
                 >
-                  {isProcessing ? (
-                    <><Loader2 size={20} className="animate-spin" /> Analyse en cours...</>
-                  ) : (
-                    <><Eye size={20} /> Analyser avec Gemini</>
-                  )}
+                  {isProcessing ? <><Loader2 size={20} className="animate-spin" /> Analyse...</> : <><Eye size={20} /> Analyser avec Gemini</>}
                 </button>
               )}
+
+              <button onClick={() => setMode(null)} className="mt-4 text-sm text-gray-500 hover:text-gray-700">← Retour</button>
             </>
           )}
 
           {/* Formulaire d'édition */}
           {editablePatient && (
             <div className="space-y-6">
-              {/* Confiance */}
               {extractedData?.confiance && (
                 <div className={`p-2 rounded-lg text-sm flex items-center gap-2 ${
                   extractedData.confiance === 'haute' ? 'bg-green-100 text-green-700' :
@@ -333,96 +436,50 @@ export function ImageImport({ onImportComplete, existingPatientIds = [] }) {
               {/* Données Patient */}
               <div className="bg-blue-50 p-4 rounded-lg">
                 <h3 className="font-bold text-blue-800 mb-3 flex items-center gap-2">
-                  <Edit3 size={18} />
-                  Données Patient (modifiables)
+                  <Edit3 size={18} /> Données Patient
                 </h3>
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                  <div>
-                    <label className="block text-xs text-blue-600 mb-1">ID Patient</label>
-                    <input
-                      type="text"
-                      value={editablePatient.id_patient}
-                      onChange={(e) => updatePatientField('id_patient', e.target.value)}
-                      className="w-full px-2 py-1 text-sm border border-blue-300 rounded"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-blue-600 mb-1">ID Fiche</label>
-                    <input
-                      type="text"
-                      value={editablePatient.id_fiche}
-                      onChange={(e) => updatePatientField('id_fiche', e.target.value)}
-                      className="w-full px-2 py-1 text-sm border border-blue-300 rounded"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-blue-600 mb-1">Nom Prénom</label>
-                    <input
-                      type="text"
-                      value={editablePatient.nom_prenom}
-                      onChange={(e) => updatePatientField('nom_prenom', e.target.value)}
-                      className="w-full px-2 py-1 text-sm border border-blue-300 rounded"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-blue-600 mb-1">Date Naissance</label>
-                    <input
-                      type="date"
-                      value={editablePatient.date_naissance}
-                      onChange={(e) => updatePatientField('date_naissance', e.target.value)}
-                      className="w-full px-2 py-1 text-sm border border-blue-300 rounded"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-blue-600 mb-1">Poids Naiss. (g)</label>
-                    <input
-                      type="number"
-                      value={editablePatient.poids_naissance_g}
-                      onChange={(e) => updatePatientField('poids_naissance_g', e.target.value)}
-                      className="w-full px-2 py-1 text-sm border border-blue-300 rounded"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-blue-600 mb-1">Taille Naiss. (cm)</label>
-                    <input
-                      type="number"
-                      value={editablePatient.taille_naissance_cm}
-                      onChange={(e) => updatePatientField('taille_naissance_cm', e.target.value)}
-                      className="w-full px-2 py-1 text-sm border border-blue-300 rounded"
-                    />
-                  </div>
+                  {[
+                    { key: 'id_patient', label: 'ID Patient', type: 'text' },
+                    { key: 'id_fiche', label: 'ID Fiche', type: 'text' },
+                    { key: 'nom_prenom', label: 'Nom Prénom', type: 'text' },
+                    { key: 'date_naissance', label: 'Date Naissance', type: 'date' },
+                    { key: 'poids_naissance_g', label: 'Poids Naiss. (g)', type: 'number' },
+                    { key: 'taille_naissance_cm', label: 'Taille Naiss. (cm)', type: 'number' },
+                  ].map(field => (
+                    <div key={field.key}>
+                      <label className="block text-xs text-blue-600 mb-1">{field.label}</label>
+                      <input
+                        type={field.type}
+                        value={editablePatient[field.key]}
+                        onChange={(e) => updatePatientField(field.key, e.target.value)}
+                        className="w-full px-2 py-1 text-sm border border-blue-300 rounded"
+                      />
+                    </div>
+                  ))}
+
                   <div>
                     <label className="block text-xs text-blue-600 mb-1">Sexe</label>
-                    <select
-                      value={editablePatient.sexe}
-                      onChange={(e) => updatePatientField('sexe', e.target.value)}
-                      className="w-full px-2 py-1 text-sm border border-blue-300 rounded"
-                    >
+                    <select value={editablePatient.sexe} onChange={(e) => updatePatientField('sexe', e.target.value)} className="w-full px-2 py-1 text-sm border border-blue-300 rounded">
                       <option value="">--</option>
                       <option value="M">M</option>
                       <option value="F">F</option>
                     </select>
                   </div>
+
                   <div>
                     <label className="block text-xs text-blue-600 mb-1">Type Fente</label>
-                    <select
-                      value={editablePatient.type_fente}
-                      onChange={(e) => updatePatientField('type_fente', e.target.value)}
-                      className="w-full px-2 py-1 text-sm border border-blue-300 rounded"
-                    >
+                    <select value={editablePatient.type_fente} onChange={(e) => updatePatientField('type_fente', e.target.value)} className="w-full px-2 py-1 text-sm border border-blue-300 rounded">
                       <option value="">--</option>
                       <option value="Labiale">Labiale</option>
                       <option value="Palatine">Palatine</option>
                       <option value="Labiopalatine">Labiopalatine</option>
                     </select>
                   </div>
+
                   <div>
                     <label className="block text-xs text-blue-600 mb-1">Latéralité</label>
-                    <select
-                      value={editablePatient.lateralite}
-                      onChange={(e) => updatePatientField('lateralite', e.target.value)}
-                      className="w-full px-2 py-1 text-sm border border-blue-300 rounded"
-                    >
+                    <select value={editablePatient.lateralite} onChange={(e) => updatePatientField('lateralite', e.target.value)} className="w-full px-2 py-1 text-sm border border-blue-300 rounded">
                       <option value="">--</option>
                       <option value="Gauche">Gauche</option>
                       <option value="Droite">Droite</option>
@@ -430,59 +487,40 @@ export function ImageImport({ onImportComplete, existingPatientIds = [] }) {
                       <option value="NA">NA</option>
                     </select>
                   </div>
+
                   <div>
                     <label className="block text-xs text-blue-600 mb-1">Sévérité</label>
-                    <select
-                      value={editablePatient.severite}
-                      onChange={(e) => updatePatientField('severite', e.target.value)}
-                      className="w-full px-2 py-1 text-sm border border-blue-300 rounded"
-                    >
+                    <select value={editablePatient.severite} onChange={(e) => updatePatientField('severite', e.target.value)} className="w-full px-2 py-1 text-sm border border-blue-300 rounded">
                       <option value="">--</option>
                       <option value="Complète">Complète</option>
                       <option value="Incomplète">Incomplète</option>
                       <option value="NP">NP</option>
                     </select>
                   </div>
+
                   <div>
                     <label className="block text-xs text-blue-600 mb-1">Malf. Assoc.</label>
-                    <select
-                      value={editablePatient.malform_assoc}
-                      onChange={(e) => updatePatientField('malform_assoc', e.target.value)}
-                      className="w-full px-2 py-1 text-sm border border-blue-300 rounded"
-                    >
+                    <select value={editablePatient.malform_assoc} onChange={(e) => updatePatientField('malform_assoc', e.target.value)} className="w-full px-2 py-1 text-sm border border-blue-300 rounded">
                       <option value="">--</option>
                       <option value="Oui">Oui</option>
                       <option value="Non">Non</option>
                       <option value="NP">NP</option>
                     </select>
                   </div>
+
                   <div>
                     <label className="block text-xs text-blue-600 mb-1">Prof. Mère</label>
-                    <input
-                      type="text"
-                      value={editablePatient.prof_mere}
-                      onChange={(e) => updatePatientField('prof_mere', e.target.value)}
-                      className="w-full px-2 py-1 text-sm border border-blue-300 rounded"
-                    />
+                    <input type="text" value={editablePatient.prof_mere} onChange={(e) => updatePatientField('prof_mere', e.target.value)} className="w-full px-2 py-1 text-sm border border-blue-300 rounded" />
                   </div>
+
                   <div>
                     <label className="block text-xs text-blue-600 mb-1">Prof. Père</label>
-                    <input
-                      type="text"
-                      value={editablePatient.prof_pere}
-                      onChange={(e) => updatePatientField('prof_pere', e.target.value)}
-                      className="w-full px-2 py-1 text-sm border border-blue-300 rounded"
-                    />
+                    <input type="text" value={editablePatient.prof_pere} onChange={(e) => updatePatientField('prof_pere', e.target.value)} className="w-full px-2 py-1 text-sm border border-blue-300 rounded" />
                   </div>
+
                   <div>
                     <label className="block text-xs text-blue-600 mb-1">Lieu Résidence</label>
-                    <input
-                      type="text"
-                      value={editablePatient.milieu_residence}
-                      onChange={(e) => updatePatientField('milieu_residence', e.target.value)}
-                      className="w-full px-2 py-1 text-sm border border-blue-300 rounded"
-                      placeholder="Ville/Village"
-                    />
+                    <input type="text" value={editablePatient.milieu_residence} onChange={(e) => updatePatientField('milieu_residence', e.target.value)} className="w-full px-2 py-1 text-sm border border-blue-300 rounded" placeholder="Ville/Village" />
                   </div>
                 </div>
               </div>
@@ -491,19 +529,15 @@ export function ImageImport({ onImportComplete, existingPatientIds = [] }) {
               <div className="bg-green-50 p-4 rounded-lg">
                 <div className="flex items-center justify-between mb-3">
                   <h3 className="font-bold text-green-800 flex items-center gap-2">
-                    <Edit3 size={18} />
-                    Visites ({editableVisites.length})
+                    <Edit3 size={18} /> Visites ({editableVisites.length})
                   </h3>
-                  <button
-                    onClick={addVisite}
-                    className="flex items-center gap-1 px-2 py-1 text-sm text-green-700 bg-green-200 rounded hover:bg-green-300"
-                  >
+                  <button onClick={addVisite} className="flex items-center gap-1 px-2 py-1 text-sm text-green-700 bg-green-200 rounded hover:bg-green-300">
                     <Plus size={14} /> Ajouter
                   </button>
                 </div>
 
                 {editableVisites.length === 0 ? (
-                  <p className="text-sm text-green-600 italic">Aucune visite. Les données patient seront créées sans visite.</p>
+                  <p className="text-sm text-green-600 italic">Aucune visite.</p>
                 ) : (
                   <div className="space-y-3">
                     {editableVisites.map((visite, index) => (
@@ -512,45 +546,22 @@ export function ImageImport({ onImportComplete, existingPatientIds = [] }) {
                         <div className="flex-1 grid grid-cols-4 gap-2">
                           <div>
                             <label className="block text-xs text-green-600">Date</label>
-                            <input
-                              type="date"
-                              value={visite.date_consult}
-                              onChange={(e) => updateVisiteField(index, 'date_consult', e.target.value)}
-                              className="w-full px-2 py-1 text-sm border border-green-300 rounded"
-                            />
+                            <input type="date" value={visite.date_consult} onChange={(e) => updateVisiteField(index, 'date_consult', e.target.value)} className="w-full px-2 py-1 text-sm border border-green-300 rounded" />
                           </div>
                           <div>
                             <label className="block text-xs text-green-600">Poids (g)</label>
-                            <input
-                              type="number"
-                              value={visite.poids_g}
-                              onChange={(e) => updateVisiteField(index, 'poids_g', e.target.value)}
-                              className="w-full px-2 py-1 text-sm border border-green-300 rounded"
-                            />
+                            <input type="number" value={visite.poids_g} onChange={(e) => updateVisiteField(index, 'poids_g', e.target.value)} className="w-full px-2 py-1 text-sm border border-green-300 rounded" />
                           </div>
                           <div>
                             <label className="block text-xs text-green-600">Taille (cm)</label>
-                            <input
-                              type="number"
-                              value={visite.taille_cm}
-                              onChange={(e) => updateVisiteField(index, 'taille_cm', e.target.value)}
-                              className="w-full px-2 py-1 text-sm border border-green-300 rounded"
-                            />
+                            <input type="number" value={visite.taille_cm} onChange={(e) => updateVisiteField(index, 'taille_cm', e.target.value)} className="w-full px-2 py-1 text-sm border border-green-300 rounded" />
                           </div>
                           <div>
                             <label className="block text-xs text-green-600">PB (mm)</label>
-                            <input
-                              type="number"
-                              value={visite.pb_mm}
-                              onChange={(e) => updateVisiteField(index, 'pb_mm', e.target.value)}
-                              className="w-full px-2 py-1 text-sm border border-green-300 rounded"
-                            />
+                            <input type="number" value={visite.pb_mm} onChange={(e) => updateVisiteField(index, 'pb_mm', e.target.value)} className="w-full px-2 py-1 text-sm border border-green-300 rounded" />
                           </div>
                         </div>
-                        <button
-                          onClick={() => removeVisite(index)}
-                          className="p-1 text-red-500 hover:bg-red-100 rounded"
-                        >
+                        <button onClick={() => removeVisite(index)} className="p-1 text-red-500 hover:bg-red-100 rounded">
                           <Trash2 size={16} />
                         </button>
                       </div>
@@ -573,21 +584,13 @@ export function ImageImport({ onImportComplete, existingPatientIds = [] }) {
         {/* Footer */}
         <div className="p-4 border-t bg-gray-50 flex justify-between">
           <button
-            onClick={() => {
-              setExtractedData(null);
-              setEditablePatient(null);
-              setEditableVisites([]);
-              setImages([]);
-            }}
-            className={`px-4 py-2 text-gray-600 bg-white border rounded-lg hover:bg-gray-50 ${!editablePatient ? 'invisible' : ''}`}
+            onClick={handleRestart}
+            className={`px-4 py-2 text-gray-600 bg-white border rounded-lg hover:bg-gray-50 ${!editablePatient && !mode ? 'invisible' : ''}`}
           >
             Recommencer
           </button>
           <div className="flex gap-3">
-            <button
-              onClick={handleClose}
-              className="px-4 py-2 text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
-            >
+            <button onClick={handleClose} className="px-4 py-2 text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50">
               Annuler
             </button>
             {editablePatient && (
@@ -596,11 +599,7 @@ export function ImageImport({ onImportComplete, existingPatientIds = [] }) {
                 disabled={isProcessing}
                 className="px-4 py-2 text-white bg-green-600 rounded-lg hover:bg-green-700 disabled:opacity-50 flex items-center gap-2"
               >
-                {isProcessing ? (
-                  <Loader2 size={18} className="animate-spin" />
-                ) : (
-                  <CheckCircle size={18} />
-                )}
+                {isProcessing ? <Loader2 size={18} className="animate-spin" /> : <CheckCircle size={18} />}
                 Créer {Math.max(editableVisites.length, 1)} ligne(s)
               </button>
             )}
