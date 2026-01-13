@@ -1,9 +1,12 @@
 import React, { useState, useRef, useCallback } from 'react';
-import { Camera, Upload, X, Loader2, AlertCircle, CheckCircle, Settings, Eye, Edit3, Plus, Trash2 } from 'lucide-react';
+import { Camera, Upload, X, Loader2, AlertCircle, CheckCircle, Eye, Edit3, Plus, Trash2, Image } from 'lucide-react';
 import { extractMedicalData, generatePatientId } from '../lib/gemini';
 
+// Clé API depuis les variables d'environnement
+const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
+
 /**
- * Composant pour importer des fiches médicales via photo
+ * Composant pour importer des fiches médicales via photo ou caméra
  * Utilise Gemini Vision pour extraire les données
  * Permet l'édition avant création
  */
@@ -15,16 +18,20 @@ export function ImageImport({ onImportComplete, existingPatientIds = [] }) {
   const [extractedData, setExtractedData] = useState(null);
   const [editablePatient, setEditablePatient] = useState(null);
   const [editableVisites, setEditableVisites] = useState([]);
-  const [apiKey, setApiKey] = useState(() => localStorage.getItem('gemini_api_key') || '');
-  const [showApiKeyInput, setShowApiKeyInput] = useState(false);
   const fileInputRef = useRef(null);
+  const cameraInputRef = useRef(null);
 
   // Ouvrir le sélecteur de fichiers
   const handleSelectFiles = useCallback(() => {
     fileInputRef.current?.click();
   }, []);
 
-  // Gérer la sélection de fichiers
+  // Ouvrir la caméra
+  const handleOpenCamera = useCallback(() => {
+    cameraInputRef.current?.click();
+  }, []);
+
+  // Gérer la sélection de fichiers ou capture caméra
   const handleFileChange = useCallback((e) => {
     const files = Array.from(e.target.files || []);
     const imageFiles = files.filter(f => f.type.startsWith('image/'));
@@ -44,21 +51,10 @@ export function ImageImport({ onImportComplete, existingPatientIds = [] }) {
     setImages(prev => prev.filter((_, i) => i !== index));
   }, []);
 
-  // Sauvegarder la clé API
-  const saveApiKey = useCallback((key) => {
-    setApiKey(key);
-    if (key) {
-      localStorage.setItem('gemini_api_key', key);
-    } else {
-      localStorage.removeItem('gemini_api_key');
-    }
-  }, []);
-
   // Lancer l'extraction
   const handleExtract = useCallback(async () => {
-    if (!apiKey) {
-      setShowApiKeyInput(true);
-      setError('Veuillez configurer votre clé API Gemini');
+    if (!GEMINI_API_KEY) {
+      setError('Clé API Gemini non configurée. Ajoutez VITE_GEMINI_API_KEY dans le fichier .env');
       return;
     }
 
@@ -71,7 +67,7 @@ export function ImageImport({ onImportComplete, existingPatientIds = [] }) {
     setError(null);
 
     try {
-      const data = await extractMedicalData(images, apiKey);
+      const data = await extractMedicalData(images, GEMINI_API_KEY);
       setExtractedData(data);
 
       // Préparer les données éditables
@@ -109,7 +105,7 @@ export function ImageImport({ onImportComplete, existingPatientIds = [] }) {
     } finally {
       setIsProcessing(false);
     }
-  }, [images, apiKey, existingPatientIds]);
+  }, [images, existingPatientIds]);
 
   // Mettre à jour un champ patient
   const updatePatientField = useCallback((field, value) => {
@@ -216,70 +212,59 @@ export function ImageImport({ onImportComplete, existingPatientIds = [] }) {
             <Camera size={24} />
             Importer depuis photo
           </h2>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setShowApiKeyInput(!showApiKeyInput)}
-              className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg"
-              title="Configurer la clé API"
-            >
-              <Settings size={20} />
-            </button>
-            <button
-              onClick={handleClose}
-              className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg"
-            >
-              <X size={20} />
-            </button>
-          </div>
+          <button
+            onClick={handleClose}
+            className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg"
+          >
+            <X size={20} />
+          </button>
         </div>
 
         {/* Corps */}
         <div className="flex-1 overflow-y-auto p-4">
-          {/* Config API Key */}
-          {showApiKeyInput && (
-            <div className="mb-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
-              <label className="block text-sm font-medium text-yellow-800 mb-2">
-                Clé API Gemini (gratuite)
-              </label>
-              <div className="flex gap-2">
-                <input
-                  type="password"
-                  value={apiKey}
-                  onChange={(e) => saveApiKey(e.target.value)}
-                  placeholder="AIzaSy..."
-                  className="flex-1 px-3 py-2 border border-yellow-300 rounded-lg text-sm"
-                />
-                <a
-                  href="https://aistudio.google.com/app/apikey"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="px-3 py-2 text-sm text-yellow-700 bg-yellow-100 border border-yellow-300 rounded-lg hover:bg-yellow-200"
-                >
-                  Obtenir
-                </a>
-              </div>
-            </div>
-          )}
-
           {/* Zone upload (si pas encore de données extraites) */}
           {!editablePatient && (
             <>
-              <div
-                onClick={handleSelectFiles}
-                className="border-2 border-dashed border-purple-300 rounded-xl p-8 text-center cursor-pointer hover:border-purple-500 hover:bg-purple-50 transition-colors"
-              >
-                <Upload size={48} className="mx-auto text-purple-400 mb-4" />
-                <p className="text-purple-700 font-medium">Cliquez pour sélectionner des images</p>
-                <p className="text-sm text-purple-500 mt-1">Recto, verso, ou les deux</p>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/*"
-                  multiple
-                  onChange={handleFileChange}
-                  className="hidden"
-                />
+              {/* Boutons Caméra et Fichiers */}
+              <div className="grid grid-cols-2 gap-4 mb-4">
+                {/* Bouton Caméra */}
+                <button
+                  onClick={handleOpenCamera}
+                  className="flex flex-col items-center justify-center gap-3 p-6 border-2 border-dashed border-purple-300 rounded-xl hover:border-purple-500 hover:bg-purple-50 transition-colors"
+                >
+                  <Camera size={48} className="text-purple-500" />
+                  <span className="text-purple-700 font-medium">Prendre une photo</span>
+                  <span className="text-xs text-purple-400">Utiliser la caméra</span>
+                </button>
+
+                {/* Bouton Fichiers */}
+                <button
+                  onClick={handleSelectFiles}
+                  className="flex flex-col items-center justify-center gap-3 p-6 border-2 border-dashed border-blue-300 rounded-xl hover:border-blue-500 hover:bg-blue-50 transition-colors"
+                >
+                  <Image size={48} className="text-blue-500" />
+                  <span className="text-blue-700 font-medium">Choisir une image</span>
+                  <span className="text-xs text-blue-400">Depuis la galerie</span>
+                </button>
               </div>
+
+              {/* Inputs cachés */}
+              <input
+                ref={cameraInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                onChange={handleFileChange}
+                className="hidden"
+              />
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                onChange={handleFileChange}
+                className="hidden"
+              />
 
               {/* Preview images */}
               {images.length > 0 && (
@@ -301,6 +286,13 @@ export function ImageImport({ onImportComplete, existingPatientIds = [] }) {
                         </button>
                       </div>
                     ))}
+                    {/* Bouton ajouter plus */}
+                    <button
+                      onClick={handleOpenCamera}
+                      className="w-full h-20 flex items-center justify-center border-2 border-dashed border-gray-300 rounded-lg hover:border-purple-400 hover:bg-purple-50"
+                    >
+                      <Plus size={24} className="text-gray-400" />
+                    </button>
                   </div>
                 </div>
               )}
@@ -585,6 +577,7 @@ export function ImageImport({ onImportComplete, existingPatientIds = [] }) {
               setExtractedData(null);
               setEditablePatient(null);
               setEditableVisites([]);
+              setImages([]);
             }}
             className={`px-4 py-2 text-gray-600 bg-white border rounded-lg hover:bg-gray-50 ${!editablePatient ? 'invisible' : ''}`}
           >
