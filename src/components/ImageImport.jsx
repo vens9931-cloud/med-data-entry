@@ -1,11 +1,9 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
-import { Camera, Upload, X, Loader2, AlertCircle, CheckCircle, Eye, Edit3, Plus, Trash2, Image, Smartphone, Monitor } from 'lucide-react';
+import { Camera, Upload, X, Loader2, AlertCircle, CheckCircle, Eye, Edit3, Plus, Trash2, Image, Smartphone, Monitor, Settings } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
-import { extractMedicalData, generatePatientId } from '../lib/gemini';
+import { extractMedicalData, generatePatientId, loadAIConfig, getProviderName, getActiveApiKey } from '../lib/aiService';
 import { generateSessionId, getMobileUploadUrl, listSessionImages, downloadImageAsFile, clearSession, subscribeToSession } from '../lib/imageSync';
-
-// Clé API depuis les variables d'environnement
-const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
+import { ApiSettings } from './ApiSettings';
 
 /**
  * Composant pour importer des fiches médicales via photo, caméra ou téléphone
@@ -27,6 +25,10 @@ export function ImageImport({ onImportComplete, existingPatientIds = [] }) {
   const [mobileUrl, setMobileUrl] = useState('');
   const [receivedImages, setReceivedImages] = useState([]);
   const unsubscribeRef = useRef(null);
+
+  // État pour les paramètres API
+  const [showApiSettings, setShowApiSettings] = useState(false);
+  const [aiConfig, setAiConfig] = useState(loadAIConfig());
 
   // Démarrer une session mobile
   const startMobileSession = useCallback(() => {
@@ -107,10 +109,19 @@ export function ImageImport({ onImportComplete, existingPatientIds = [] }) {
     setImages(prev => prev.filter((_, i) => i !== index));
   }, []);
 
+  // Recharger la config API quand les paramètres sont fermés
+  const handleApiSettingsClose = useCallback(() => {
+    setShowApiSettings(false);
+    setAiConfig(loadAIConfig());
+  }, []);
+
   // Lancer l'extraction
   const handleExtract = useCallback(async () => {
-    if (!GEMINI_API_KEY) {
-      setError('Clé API Gemini non configurée. Ajoutez VITE_GEMINI_API_KEY dans .env');
+    const currentConfig = loadAIConfig();
+    const apiKey = getActiveApiKey(currentConfig);
+
+    if (!apiKey) {
+      setError(`Aucune clé API ${currentConfig.provider === 'grok' ? 'Grok' : 'Gemini'} configurée. Cliquez sur "Paramètres API" pour en ajouter une.`);
       return;
     }
 
@@ -123,8 +134,9 @@ export function ImageImport({ onImportComplete, existingPatientIds = [] }) {
     setError(null);
 
     try {
-      const data = await extractMedicalData(images, GEMINI_API_KEY);
+      const data = await extractMedicalData(images, currentConfig);
       setExtractedData(data);
+      setAiConfig(loadAIConfig()); // Recharger au cas où la clé a été rotée
 
       const patientId = data.patient?.nom_prenom
         ? generatePatientId(data.patient.nom_prenom, existingPatientIds)
@@ -199,10 +211,23 @@ export function ImageImport({ onImportComplete, existingPatientIds = [] }) {
     try {
       let visites = editableVisites.map(v => ({
         ...editablePatient,
+        // Données variables
         date_consult: v.date_consult,
         poids_g: v.poids_g,
         taille_cm: v.taille_cm,
-        pb_mm: v.pb_mm
+        pb_mm: v.pb_mm,
+        mode_alim: v.mode_alim,
+        diff_succion: v.diff_succion,
+        fuite_nasale: v.fuite_nasale,
+        vomiss: v.vomiss,
+        conseil_nutri: v.conseil_nutri,
+        tech_specifique: v.tech_specifique,
+        dispositif_spec: v.dispositif_spec,
+        prescription: v.prescription,
+        ref_nutri: v.ref_nutri,
+        complication: v.complication,
+        suivi_programme: v.suivi_programme,
+        perte_vue: v.perte_vue
       }));
 
       if (visites.length === 0) {
@@ -211,7 +236,19 @@ export function ImageImport({ onImportComplete, existingPatientIds = [] }) {
           date_consult: '',
           poids_g: '',
           taille_cm: '',
-          pb_mm: ''
+          pb_mm: '',
+          mode_alim: '',
+          diff_succion: '',
+          fuite_nasale: '',
+          vomiss: '',
+          conseil_nutri: '',
+          tech_specifique: '',
+          dispositif_spec: '',
+          prescription: '',
+          ref_nutri: '',
+          complication: '',
+          suivi_programme: '',
+          perte_vue: ''
         }];
       }
 
@@ -405,13 +442,25 @@ export function ImageImport({ onImportComplete, existingPatientIds = [] }) {
               )}
 
               {images.length > 0 && (
-                <button
-                  onClick={handleExtract}
-                  disabled={isProcessing}
-                  className="mt-4 w-full flex items-center justify-center gap-2 px-4 py-3 text-white bg-purple-600 rounded-lg hover:bg-purple-700 disabled:opacity-50"
-                >
-                  {isProcessing ? <><Loader2 size={20} className="animate-spin" /> Analyse...</> : <><Eye size={20} /> Analyser avec Gemini</>}
-                </button>
+                <div className="mt-4 space-y-2">
+                  <button
+                    onClick={handleExtract}
+                    disabled={isProcessing}
+                    className="w-full flex items-center justify-center gap-2 px-4 py-3 text-white bg-purple-600 rounded-lg hover:bg-purple-700 disabled:opacity-50"
+                  >
+                    {isProcessing ? (
+                      <><Loader2 size={20} className="animate-spin" /> Analyse en cours...</>
+                    ) : (
+                      <><Eye size={20} /> Analyser avec {getProviderName(aiConfig)}</>
+                    )}
+                  </button>
+                  <button
+                    onClick={() => setShowApiSettings(true)}
+                    className="w-full flex items-center justify-center gap-2 px-3 py-2 text-sm text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200"
+                  >
+                    <Settings size={16} /> Paramètres API
+                  </button>
+                </div>
               )}
 
               <button onClick={() => setMode(null)} className="mt-4 text-sm text-gray-500 hover:text-gray-700">← Retour</button>
@@ -539,31 +588,150 @@ export function ImageImport({ onImportComplete, existingPatientIds = [] }) {
                 {editableVisites.length === 0 ? (
                   <p className="text-sm text-green-600 italic">Aucune visite.</p>
                 ) : (
-                  <div className="space-y-3">
+                  <div className="space-y-4">
                     {editableVisites.map((visite, index) => (
-                      <div key={visite.id} className="flex items-center gap-3 p-2 bg-white rounded border border-green-200">
-                        <span className="text-xs text-green-600 font-bold w-6">#{index + 1}</span>
-                        <div className="flex-1 grid grid-cols-4 gap-2">
+                      <div key={visite.id} className="p-3 bg-white rounded border border-green-200">
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-sm text-green-700 font-bold">Visite #{index + 1}</span>
+                          <button onClick={() => removeVisite(index)} className="p-1 text-red-500 hover:bg-red-100 rounded">
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
+
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                          {/* Données anthropométriques */}
                           <div>
-                            <label className="block text-xs text-green-600">Date</label>
+                            <label className="block text-xs text-green-600 mb-1">Date Consult.</label>
                             <input type="date" value={visite.date_consult} onChange={(e) => updateVisiteField(index, 'date_consult', e.target.value)} className="w-full px-2 py-1 text-sm border border-green-300 rounded" />
                           </div>
                           <div>
-                            <label className="block text-xs text-green-600">Poids (g)</label>
+                            <label className="block text-xs text-green-600 mb-1">Poids (g)</label>
                             <input type="number" value={visite.poids_g} onChange={(e) => updateVisiteField(index, 'poids_g', e.target.value)} className="w-full px-2 py-1 text-sm border border-green-300 rounded" />
                           </div>
                           <div>
-                            <label className="block text-xs text-green-600">Taille (cm)</label>
+                            <label className="block text-xs text-green-600 mb-1">Taille (cm)</label>
                             <input type="number" value={visite.taille_cm} onChange={(e) => updateVisiteField(index, 'taille_cm', e.target.value)} className="w-full px-2 py-1 text-sm border border-green-300 rounded" />
                           </div>
                           <div>
-                            <label className="block text-xs text-green-600">PB (mm)</label>
+                            <label className="block text-xs text-green-600 mb-1">PB (mm)</label>
                             <input type="number" value={visite.pb_mm} onChange={(e) => updateVisiteField(index, 'pb_mm', e.target.value)} className="w-full px-2 py-1 text-sm border border-green-300 rounded" />
                           </div>
+
+                          {/* Alimentation */}
+                          <div>
+                            <label className="block text-xs text-green-600 mb-1">Mode Alim.</label>
+                            <select value={visite.mode_alim || ''} onChange={(e) => updateVisiteField(index, 'mode_alim', e.target.value)} className="w-full px-2 py-1 text-sm border border-green-300 rounded">
+                              <option value="">--</option>
+                              <option value="AME">AME</option>
+                              <option value="Mixte">Mixte</option>
+                              <option value="Artificiel">Artificiel</option>
+                              <option value="NP">NP</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-xs text-green-600 mb-1">Diff. Succion</label>
+                            <select value={visite.diff_succion || ''} onChange={(e) => updateVisiteField(index, 'diff_succion', e.target.value)} className="w-full px-2 py-1 text-sm border border-green-300 rounded">
+                              <option value="">--</option>
+                              <option value="Oui">Oui</option>
+                              <option value="Non">Non</option>
+                              <option value="NP">NP</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-xs text-green-600 mb-1">Fuite Nasale</label>
+                            <select value={visite.fuite_nasale || ''} onChange={(e) => updateVisiteField(index, 'fuite_nasale', e.target.value)} className="w-full px-2 py-1 text-sm border border-green-300 rounded">
+                              <option value="">--</option>
+                              <option value="Oui">Oui</option>
+                              <option value="Non">Non</option>
+                              <option value="NP">NP</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-xs text-green-600 mb-1">Vomissements</label>
+                            <select value={visite.vomiss || ''} onChange={(e) => updateVisiteField(index, 'vomiss', e.target.value)} className="w-full px-2 py-1 text-sm border border-green-300 rounded">
+                              <option value="">--</option>
+                              <option value="Oui">Oui</option>
+                              <option value="Non">Non</option>
+                              <option value="NP">NP</option>
+                            </select>
+                          </div>
+
+                          {/* Prise en charge */}
+                          <div>
+                            <label className="block text-xs text-green-600 mb-1">Conseil Nutri</label>
+                            <select value={visite.conseil_nutri || ''} onChange={(e) => updateVisiteField(index, 'conseil_nutri', e.target.value)} className="w-full px-2 py-1 text-sm border border-green-300 rounded">
+                              <option value="">--</option>
+                              <option value="Oui">Oui</option>
+                              <option value="Non">Non</option>
+                              <option value="NP">NP</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-xs text-green-600 mb-1">Tech. Spéc.</label>
+                            <select value={visite.tech_specifique || ''} onChange={(e) => updateVisiteField(index, 'tech_specifique', e.target.value)} className="w-full px-2 py-1 text-sm border border-green-300 rounded">
+                              <option value="">--</option>
+                              <option value="Oui">Oui</option>
+                              <option value="Non">Non</option>
+                              <option value="NP">NP</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-xs text-green-600 mb-1">Disp. Spéc.</label>
+                            <select value={visite.dispositif_spec || ''} onChange={(e) => updateVisiteField(index, 'dispositif_spec', e.target.value)} className="w-full px-2 py-1 text-sm border border-green-300 rounded">
+                              <option value="">--</option>
+                              <option value="Oui">Oui</option>
+                              <option value="Non">Non</option>
+                              <option value="NP">NP</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-xs text-green-600 mb-1">Prescription</label>
+                            <select value={visite.prescription || ''} onChange={(e) => updateVisiteField(index, 'prescription', e.target.value)} className="w-full px-2 py-1 text-sm border border-green-300 rounded">
+                              <option value="">--</option>
+                              <option value="Oui">Oui</option>
+                              <option value="Non">Non</option>
+                              <option value="NP">NP</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-xs text-green-600 mb-1">Réf. Nutri</label>
+                            <select value={visite.ref_nutri || ''} onChange={(e) => updateVisiteField(index, 'ref_nutri', e.target.value)} className="w-full px-2 py-1 text-sm border border-green-300 rounded">
+                              <option value="">--</option>
+                              <option value="Oui">Oui</option>
+                              <option value="Non">Non</option>
+                              <option value="NP">NP</option>
+                            </select>
+                          </div>
+
+                          {/* Suivi */}
+                          <div>
+                            <label className="block text-xs text-green-600 mb-1">Complication</label>
+                            <select value={visite.complication || ''} onChange={(e) => updateVisiteField(index, 'complication', e.target.value)} className="w-full px-2 py-1 text-sm border border-green-300 rounded">
+                              <option value="">--</option>
+                              <option value="Oui">Oui</option>
+                              <option value="Non">Non</option>
+                              <option value="NP">NP</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-xs text-green-600 mb-1">Suivi Programm.</label>
+                            <select value={visite.suivi_programme || ''} onChange={(e) => updateVisiteField(index, 'suivi_programme', e.target.value)} className="w-full px-2 py-1 text-sm border border-green-300 rounded">
+                              <option value="">--</option>
+                              <option value="Oui">Oui</option>
+                              <option value="Non">Non</option>
+                              <option value="NP">NP</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-xs text-green-600 mb-1">Perte de Vue</label>
+                            <select value={visite.perte_vue || ''} onChange={(e) => updateVisiteField(index, 'perte_vue', e.target.value)} className="w-full px-2 py-1 text-sm border border-green-300 rounded">
+                              <option value="">--</option>
+                              <option value="Oui">Oui</option>
+                              <option value="Non">Non</option>
+                              <option value="NP">NP</option>
+                            </select>
+                          </div>
                         </div>
-                        <button onClick={() => removeVisite(index)} className="p-1 text-red-500 hover:bg-red-100 rounded">
-                          <Trash2 size={16} />
-                        </button>
                       </div>
                     ))}
                   </div>
@@ -606,6 +774,11 @@ export function ImageImport({ onImportComplete, existingPatientIds = [] }) {
           </div>
         </div>
       </div>
+
+      {/* Modal des paramètres API */}
+      {showApiSettings && (
+        <ApiSettings onClose={handleApiSettingsClose} />
+      )}
     </div>
   );
 }

@@ -16,7 +16,10 @@ import {
   Activity,
   Baby,
   Heart,
-  Info
+  Info,
+  Settings,
+  Edit,
+  MoreVertical
 } from 'lucide-react';
 
 // Imports Supabase
@@ -24,6 +27,9 @@ import { useVisites } from './hooks/useVisites';
 import { PatientIdInput } from './components/PatientIdInput';
 import { StatusIndicator, ErrorMessage, TableSkeleton } from './components/StatusIndicator';
 import { ImageImport } from './components/ImageImport';
+import { ApiSettings } from './components/ApiSettings';
+import { VisiteEditModal } from './components/VisiteEditModal';
+import { VisiteAddButton } from './components/VisiteAddModal';
 
 // =============================================================================
 // TYPES ET CONSTANTES
@@ -321,6 +327,10 @@ export default function NutritionalTrackingApp() {
   const [activeTab, setActiveTab] = useState('saisie');
   // État local pour les valeurs en cours de saisie (pour mise à jour immédiate de l'UI)
   const [localValues, setLocalValues] = useState({});
+  // État pour afficher/masquer le modal de configuration API
+  const [showApiSettings, setShowApiSettings] = useState(false);
+  // État pour le modal d'édition de visite
+  const [editingVisite, setEditingVisite] = useState(null);
 
   // Hook Supabase pour les données
   const {
@@ -483,6 +493,16 @@ export default function NutritionalTrackingApp() {
     return [...new Set(data.filter(r => r.id_patient).map(r => r.id_patient))];
   }, [data]);
 
+  // Sauvegarder les modifications depuis le modal d'édition
+  const handleSaveEdit = useCallback(async (updatedVisite) => {
+    try {
+      await updateMultipleCells(updatedVisite.id, updatedVisite);
+    } catch (err) {
+      console.error('Échec de la sauvegarde:', err);
+      throw err;
+    }
+  }, [updateMultipleCells]);
+
   // Export CSV
   const exportCSV = useCallback(() => {
     const headers = [
@@ -509,80 +529,16 @@ export default function NutritionalTrackingApp() {
     link.click();
   }, [dataWithCalculations]);
 
-  // Rendu des cellules d'input
+  // Rendu des cellules en lecture seule
   const renderCell = (row, column, isFixed) => {
     const value = row[column.key];
     const bgColor = isFixed ? 'bg-blue-50' : 'bg-green-50';
 
-    // Input spécial pour id_patient avec auto-remplissage
-    if (column.key === 'id_patient') {
-      return (
-        <PatientIdInput
-          value={value}
-          rowId={row.id}
-          onUpdateCell={updateCell}
-          onAutoFill={handleAutoFill}
-          className={`w-full px-1 py-1 text-xs border border-gray-300 rounded ${bgColor} focus:ring-1 focus:ring-blue-500`}
-        />
-      );
-    }
-
-    if (column.type === 'select') {
-      return (
-        <select
-          value={value || ''}
-          onChange={(e) => updateCell(row.id, column.key, e.target.value)}
-          className={`w-full px-1 py-1 text-xs border border-gray-300 rounded ${bgColor} focus:ring-1 focus:ring-blue-500 focus:border-blue-500`}
-        >
-          <option value="">--</option>
-          {column.options.map(opt => (
-            <option key={opt} value={opt}>{opt}</option>
-          ))}
-        </select>
-      );
-    }
-
-    if (column.type === 'date') {
-      return (
-        <input
-          type="date"
-          value={value || ''}
-          onChange={(e) => updateCell(row.id, column.key, e.target.value)}
-          className={`w-full px-1 py-1 text-xs border border-gray-300 rounded ${bgColor} focus:ring-1 focus:ring-blue-500`}
-        />
-      );
-    }
-
-    if (column.type === 'number') {
-      return (
-        <input
-          type="number"
-          value={value || ''}
-          onChange={(e) => {
-            const newValue = e.target.value ? Number(e.target.value) : '';
-            updateCellLocal(row.id, column.key, newValue);
-          }}
-          onBlur={(e) => {
-            const finalValue = e.target.value ? Number(e.target.value) : '';
-            saveCellToDb(row.id, column.key, finalValue);
-          }}
-          className={`w-full px-1 py-1 text-xs border border-gray-300 rounded ${bgColor} focus:ring-1 focus:ring-blue-500`}
-        />
-      );
-    }
-
+    // Affichage simple en lecture seule
     return (
-      <input
-        type="text"
-        value={value || ''}
-        onChange={(e) => {
-          updateCellLocal(row.id, column.key, e.target.value);
-        }}
-        onBlur={(e) => {
-          saveCellToDb(row.id, column.key, e.target.value);
-        }}
-        className={`w-full px-1 py-1 text-xs border border-gray-300 rounded ${bgColor} focus:ring-1 focus:ring-blue-500`}
-      />
+      <div className={`w-full px-2 py-1.5 text-xs ${bgColor} rounded`}>
+        {value || '-'}
+      </div>
     );
   };
 
@@ -636,14 +592,10 @@ export default function NutritionalTrackingApp() {
       {/* Toolbar */}
       <div className="flex items-center justify-between p-4 bg-gray-100 border-b">
         <div className="flex items-center gap-4">
-          <button
-            onClick={addRow}
-            disabled={isSyncing || loading}
-            className="flex items-center gap-2 px-4 py-2 text-white bg-green-600 rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <Plus size={18} />
-            Nouvelle visite
-          </button>
+          <VisiteAddButton
+            onImportComplete={handleImageImport}
+            existingPatientIds={existingPatientIds}
+          />
           <ImageImport
             onImportComplete={handleImageImport}
             existingPatientIds={existingPatientIds}
@@ -732,7 +684,7 @@ export default function NutritionalTrackingApp() {
                   {col.label}
                 </th>
               ))}
-              <th className="px-2 py-2 text-xs font-semibold text-gray-700 bg-gray-200 border">🗑️</th>
+              <th className="px-2 py-2 text-xs font-semibold text-gray-700 bg-gray-200 border">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -754,13 +706,22 @@ export default function NutritionalTrackingApp() {
                   </td>
                 ))}
                 <td className="px-2 py-1 text-center border border-gray-200">
-                  <button
-                    onClick={() => deleteRow(row.id)}
-                    className="p-1 text-red-600 hover:text-red-800 hover:bg-red-100 rounded transition-colors"
-                    title="Supprimer cette ligne"
-                  >
-                    <Trash2 size={16} />
-                  </button>
+                  <div className="flex items-center justify-center gap-1">
+                    <button
+                      onClick={() => setEditingVisite(row)}
+                      className="p-1 text-blue-600 hover:text-blue-800 hover:bg-blue-100 rounded transition-colors"
+                      title="Modifier cette visite"
+                    >
+                      <Edit size={16} />
+                    </button>
+                    <button
+                      onClick={() => deleteRow(row.id)}
+                      className="p-1 text-red-600 hover:text-red-800 hover:bg-red-100 rounded transition-colors"
+                      title="Supprimer cette ligne"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}
@@ -770,7 +731,7 @@ export default function NutritionalTrackingApp() {
         {data.length === 0 && !loading && (
           <div className="flex flex-col items-center justify-center py-12 text-gray-500">
             <FileSpreadsheet size={48} className="mb-4 opacity-50" />
-            <p>Aucune donnée. Cliquez sur "Nouvelle visite" pour commencer.</p>
+            <p>Aucune donnée. Cliquez sur "Importer depuis photo" pour commencer la saisie.</p>
           </div>
         )}
         </>
@@ -1131,13 +1092,23 @@ export default function NutritionalTrackingApp() {
     <div className="flex flex-col h-screen bg-gray-50">
       {/* Header */}
       <header className="bg-gradient-to-r from-blue-700 to-blue-900 text-white p-4 shadow-lg">
-        <div className="max-w-7xl mx-auto">
-          <h1 className="text-xl font-bold">
-            Suivi Nutritionnel - Fentes Orofaciales
-          </h1>
-          <p className="text-blue-200 text-sm mt-1">
-            CHU Pédiatrique Charles de Gaulle - Ouagadougou, Burkina Faso
-          </p>
+        <div className="max-w-7xl mx-auto flex items-center justify-between">
+          <div>
+            <h1 className="text-xl font-bold">
+              Suivi Nutritionnel - Fentes Orofaciales
+            </h1>
+            <p className="text-blue-200 text-sm mt-1">
+              CHU Pédiatrique Charles de Gaulle - Ouagadougou, Burkina Faso
+            </p>
+          </div>
+          <button
+            onClick={() => setShowApiSettings(true)}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg transition-colors"
+            title="Configurer les clés API"
+          >
+            <Settings size={20} />
+            <span className="hidden sm:inline">Paramètres API</span>
+          </button>
         </div>
       </header>
 
@@ -1195,6 +1166,20 @@ export default function NutritionalTrackingApp() {
 
       {/* Message d'erreur toast */}
       <ErrorMessage error={error} onDismiss={clearError} />
+
+      {/* Modal de configuration API */}
+      {showApiSettings && (
+        <ApiSettings onClose={() => setShowApiSettings(false)} />
+      )}
+
+      {/* Modal d'édition de visite */}
+      {editingVisite && (
+        <VisiteEditModal
+          visite={editingVisite}
+          onSave={handleSaveEdit}
+          onClose={() => setEditingVisite(null)}
+        />
+      )}
     </div>
   );
 }
